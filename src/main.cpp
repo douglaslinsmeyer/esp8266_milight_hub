@@ -216,6 +216,31 @@ void onUpdateEnd() {
 }
 
 /**
+ * Set up the MQTT client. Must not be called before the network stack is up:
+ * on ESP32, connecting with no network asserts in lwIP ("Invalid mbox",
+ * upstream issue #865) and the device boot-loops.
+ */
+void initMqttClient() {
+  if (settings.mqttServer().length() == 0) {
+    return;
+  }
+
+  mqttClient = new MqttClient(settings, milightClient);
+  mqttClient->begin();
+  mqttClient->onConnect([]() {
+    if (settings.homeAssistantDiscoveryPrefix.length() > 0) {
+      HomeAssistantDiscoveryClient discoveryClient(settings, mqttClient);
+      discoveryClient.sendDiscoverableDevices(settings.groupIdAliases);
+      discoveryClient.removeOldDevices(settings.deletedGroupIdAliases);
+
+      settings.deletedGroupIdAliases.clear();
+    }
+  });
+
+  bulbStateUpdater = new BulbStateUpdater(settings, *mqttClient, *stateStore);
+}
+
+/**
  * Apply what's in the Settings object.
  */
 void applySettings() {
@@ -262,20 +287,10 @@ void applySettings() {
   milightClient->onUpdateBegin(onUpdateBegin);
   milightClient->onUpdateEnd(onUpdateEnd);
 
-  if (settings.mqttServer().length() > 0) {
-    mqttClient = new MqttClient(settings, milightClient);
-    mqttClient->begin();
-    mqttClient->onConnect([]() {
-      if (settings.homeAssistantDiscoveryPrefix.length() > 0) {
-        HomeAssistantDiscoveryClient discoveryClient(settings, mqttClient);
-        discoveryClient.sendDiscoverableDevices(settings.groupIdAliases);
-        discoveryClient.removeOldDevices(settings.deletedGroupIdAliases);
-
-        settings.deletedGroupIdAliases.clear();
-      }
-    });
-
-    bulbStateUpdater = new BulbStateUpdater(settings, *mqttClient, *stateStore);
+  // Deferred to postConnectSetup() when the network is down (boot-time
+  // call); runtime settings saves arrive with WiFi already connected.
+  if (WiFi.isConnected()) {
+    initMqttClient();
   }
 
   initMilightUdpServers();
@@ -343,6 +358,8 @@ void wifiExtraSettingsChange() {
 }
 
 void aboutHandler(JsonDocument& json) {
+  json[FPSTR("wifi_rssi")] = WiFi.RSSI();
+
   JsonObject mqtt = json.createNestedObject(FPSTR("mqtt"));
   mqtt[FPSTR("configured")] = (mqttClient != nullptr);
 
@@ -373,7 +390,24 @@ void postConnectSetup() {
   delete wifiManager;
   wifiManager = NULL;
 
+  // A mains-powered hub should never doze: modem power-save adds hundreds of
+  // ms of latency and drops packets when the AP's beacon timing doesn't suit
+  // the chip's sleep schedule.
+  WiFi.setSleep(false);
+
+  // mDNS must start after the network is up on ESP32 (upstream issue #866);
+  // it used to run in setup() and always fail there.
+  if (! MDNS.begin("milight-hub")) {
+    Serial.println(F("Error setting up MDNS responder"));
+  }
+
   MDNS.addService("http", "tcp", 80);
+
+  // MQTT init is skipped in applySettings() while the network is down
+  // (upstream issue #865); do it now that WiFi is connected.
+  if (mqttClient == NULL) {
+    initMqttClient();
+  }
 
   SSDP.setSchemaURL("description.xml");
   SSDP.setHTTPPort(80);
@@ -432,9 +466,7 @@ void setup() {
   ledStatus->continuous(settings.ledModeWifiConfig);
 
   // start up the wifi manager
-  if (! MDNS.begin("milight-hub")) {
-    Serial.println(F("Error setting up MDNS responder"));
-  }
+  // (mDNS setup moved to postConnectSetup(); it requires the network to be up)
 
   // Allows us to have static IP config in the captive portal. Yucky pointers to pointers, just to have the settings carry through
   wifiManager = new WiFiManager();
@@ -551,6 +583,13 @@ void loop() {
     packetSender->loop();
 
     transitions.loop();
+
+    // Link telemetry on serial for RF debugging (independent of the network)
+    static unsigned long lastLinkReport = 0;
+    if (millis() - lastLinkReport > 5000) {
+      lastLinkReport = millis();
+      Serial.printf_P(PSTR("[link] rssi=%d dBm heap=%u\n"), WiFi.RSSI(), ESP.getFreeHeap());
+    }
   }
 }
 
