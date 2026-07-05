@@ -34,6 +34,26 @@ void MiLightHttpServer::bindLightHubRoutes() {
   server
     .buildHandler("/light_registry.json")
     .onSimple(HTTP_GET, std::bind(&MiLightHttpServer::serveFile, this, LightHub::REGISTRY_FILE, "application/json"));
+
+  server
+    .buildHandler("/groups")
+    .on(HTTP_GET, std::bind(&MiLightHttpServer::handleListGroupsLH, this, _1))
+    .on(HTTP_POST, std::bind(&MiLightHttpServer::handleCreateGroupLH, this, _1));
+
+  server
+    .buildHandler("/groups/:group_id")
+    .on(HTTP_GET, std::bind(&MiLightHttpServer::handleGetGroupLH, this, _1))
+    .on(HTTP_PUT, std::bind(&MiLightHttpServer::handleUpdateGroupLH, this, _1))
+    .on(HTTP_DELETE, std::bind(&MiLightHttpServer::handleDeleteGroupLH, this, _1));
+
+  server
+    .buildHandler("/groups/:group_id/state")
+    .on(HTTP_PUT, std::bind(&MiLightHttpServer::handleGroupState, this, _1));
+
+  server
+    .buildHandler("/groups/:group_id/members/:fixture_id")
+    .on(HTTP_POST, std::bind(&MiLightHttpServer::handleAddGroupMember, this, _1))
+    .on(HTTP_DELETE, std::bind(&MiLightHttpServer::handleRemoveGroupMember, this, _1));
 }
 
 // ---- helpers ----
@@ -362,4 +382,191 @@ void MiLightHttpServer::handleDeleteFixture(RequestContext& request) {
   }
   request.response.json[F("success")] = true;
   request.response.json[F("rf_unpair")] = rfUnpair;
+}
+
+// ---- device groups ----
+
+void MiLightHttpServer::lightHubGroupJson(const LightHub::DeviceGroup& g, JsonObject out, bool includeMembers) {
+  out[F("id")] = g.id;
+  out[F("name")] = g.name;
+  out[F("fixture_count")] = g.fixtureIds.size();
+  if (includeMembers) {
+    JsonArray members = out.createNestedArray(F("fixture_ids"));
+    for (uint16_t fid : g.fixtureIds) {
+      members.add(fid);
+    }
+  }
+}
+
+void MiLightHttpServer::handleListGroupsLH(RequestContext& request) {
+  JsonArray groups = request.response.json.createNestedArray(F("groups"));
+  for (const auto& g : lightHubRegistry.groups()) {
+    lightHubGroupJson(g, groups.createNestedObject(), false);
+  }
+}
+
+void MiLightHttpServer::handleCreateGroupLH(RequestContext& request) {
+  JsonObject body = request.getJsonBody().as<JsonObject>();
+  if (body.isNull() || !body.containsKey(F("name"))) {
+    request.response.setCode(400);
+    request.response.json[F("error")] = F("must specify name");
+    return;
+  }
+  LightHub::DeviceGroup* group = nullptr;
+  const LightHub::Result result = lightHubRegistry.createGroup(body[F("name")].as<const char*>(), &group);
+  if (result != LightHub::Result::OK) {
+    lightHubWriteError(request, result);
+    return;
+  }
+  if (body.containsKey(F("fixture_ids"))) {
+    std::vector<uint16_t> ids;
+    for (JsonVariant v : body[F("fixture_ids")].as<JsonArray>()) {
+      ids.push_back(v | 0);
+    }
+    const LightHub::Result memberResult = lightHubRegistry.setMembers(group->id, ids);
+    if (memberResult != LightHub::Result::OK) {
+      lightHubRegistry.deleteGroup(group->id);  // nothing half-assigned on abort
+      lightHubWriteError(request, memberResult);
+      return;
+    }
+  }
+  const bool registryOk = LightHub::saveRegistry(lightHubRegistry);
+  if (!registryOk) {
+    request.response.setCode(500);
+    request.response.json[F("error")] = F("failed to persist group");
+    return;
+  }
+  lightHubGroupJson(*group, request.response.json.to<JsonObject>(), true);
+}
+
+void MiLightHttpServer::handleGetGroupLH(RequestContext& request) {
+  LightHub::DeviceGroup* group = lightHubRegistry.findGroup(atoi(request.pathVariables.get("group_id")));
+  if (group == nullptr) {
+    request.response.setCode(404);
+    request.response.json[F("error")] = F("group not found");
+    return;
+  }
+  lightHubGroupJson(*group, request.response.json.to<JsonObject>(), true);
+}
+
+void MiLightHttpServer::handleUpdateGroupLH(RequestContext& request) {
+  LightHub::DeviceGroup* group = lightHubRegistry.findGroup(atoi(request.pathVariables.get("group_id")));
+  if (group == nullptr) {
+    request.response.setCode(404);
+    request.response.json[F("error")] = F("group not found");
+    return;
+  }
+  JsonObject body = request.getJsonBody().as<JsonObject>();
+  if (body.isNull() || (!body.containsKey(F("name")) && !body.containsKey(F("fixture_ids")))) {
+    request.response.setCode(400);
+    request.response.json[F("error")] = F("must specify name and/or fixture_ids");
+    return;
+  }
+  if (body.containsKey(F("name"))) {
+    const LightHub::Result result = lightHubRegistry.renameGroup(group->id, body[F("name")].as<const char*>());
+    if (result != LightHub::Result::OK) {
+      lightHubWriteError(request, result);
+      return;
+    }
+  }
+  if (body.containsKey(F("fixture_ids"))) {
+    std::vector<uint16_t> ids;
+    for (JsonVariant v : body[F("fixture_ids")].as<JsonArray>()) {
+      ids.push_back(v | 0);
+    }
+    const LightHub::Result result = lightHubRegistry.setMembers(group->id, ids);
+    if (result != LightHub::Result::OK) {
+      lightHubWriteError(request, result);
+      return;
+    }
+  }
+  const bool registryOk = LightHub::saveRegistry(lightHubRegistry);
+  if (!registryOk) {
+    request.response.setCode(500);
+    request.response.json[F("error")] = F("failed to persist group");
+    return;
+  }
+  lightHubGroupJson(*group, request.response.json.to<JsonObject>(), true);
+}
+
+void MiLightHttpServer::handleDeleteGroupLH(RequestContext& request) {
+  const LightHub::Result result = lightHubRegistry.deleteGroup(atoi(request.pathVariables.get("group_id")));
+  if (result != LightHub::Result::OK) {
+    lightHubWriteError(request, result);
+    return;
+  }
+  const bool registryOk = LightHub::saveRegistry(lightHubRegistry);
+  if (!registryOk) {
+    request.response.setCode(500);
+    request.response.json[F("error")] = F("failed to persist group deletion");
+    return;
+  }
+  request.response.json[F("success")] = true;
+}
+
+void MiLightHttpServer::handleGroupState(RequestContext& request) {
+  LightHub::DeviceGroup* group = lightHubRegistry.findGroup(atoi(request.pathVariables.get("group_id")));
+  if (group == nullptr) {
+    request.response.setCode(404);
+    request.response.json[F("error")] = F("group not found");
+    return;
+  }
+  JsonObject body = request.getJsonBody().as<JsonObject>();
+  if (body.isNull()) {
+    request.response.setCode(400);
+    request.response.json[F("error")] = F("must send a command body");
+    return;
+  }
+  size_t sent = 0;
+  for (uint16_t fid : group->fixtureIds) {
+    LightHub::Fixture* fixture = lightHubRegistry.findFixture(fid);
+    if (fixture == nullptr) continue;
+    const MiLightRemoteConfig* config = MiLightRemoteConfig::fromType(LightHub::kindToProtocol(fixture->kind));
+    if (config == nullptr) continue;
+    milightClient->prepare(config, fixture->deviceId, fixture->group);
+    handleRequest(body);  // one unicast per member — software fan-out
+    // packet queue caps at MILIGHT_MAX_QUEUED_PACKETS (20) and drops overflow:
+    // drain fully between members so large groups don't silently lose commands
+    while (packetSender->isSending()) {
+      packetSender->loop();
+      yield();
+    }
+    sent++;
+  }
+  request.response.json[F("success")] = true;
+  request.response.json[F("sent")] = sent;
+}
+
+void MiLightHttpServer::handleAddGroupMember(RequestContext& request) {
+  const LightHub::Result result = lightHubRegistry.addMember(
+    atoi(request.pathVariables.get("group_id")),
+    atoi(request.pathVariables.get("fixture_id")));
+  if (result != LightHub::Result::OK) {
+    lightHubWriteError(request, result);
+    return;
+  }
+  const bool registryOk = LightHub::saveRegistry(lightHubRegistry);
+  if (!registryOk) {
+    request.response.setCode(500);
+    request.response.json[F("error")] = F("failed to persist group membership");
+    return;
+  }
+  request.response.json[F("success")] = true;
+}
+
+void MiLightHttpServer::handleRemoveGroupMember(RequestContext& request) {
+  const LightHub::Result result = lightHubRegistry.removeMember(
+    atoi(request.pathVariables.get("group_id")),
+    atoi(request.pathVariables.get("fixture_id")));
+  if (result != LightHub::Result::OK) {
+    lightHubWriteError(request, result);
+    return;
+  }
+  const bool registryOk = LightHub::saveRegistry(lightHubRegistry);
+  if (!registryOk) {
+    request.response.setCode(500);
+    request.response.json[F("error")] = F("failed to persist group membership");
+    return;
+  }
+  request.response.json[F("success")] = true;
 }

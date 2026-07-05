@@ -135,6 +135,16 @@ protected:
       const MiLightRemoteConfig** configOut);
   void lightHubDrainAndWait(unsigned long waitMs);
 
+  void handleListGroupsLH(RequestContext& request);   // "LH" suffix: handleListGroups already exists (remote configs)
+  void handleCreateGroupLH(RequestContext& request);
+  void handleGetGroupLH(RequestContext& request);
+  void handleUpdateGroupLH(RequestContext& request);
+  void handleDeleteGroupLH(RequestContext& request);
+  void handleGroupState(RequestContext& request);
+  void handleAddGroupMember(RequestContext& request);
+  void handleRemoveGroupMember(RequestContext& request);
+  void lightHubGroupJson(const LightHub::DeviceGroup& g, JsonObject out, bool includeMembers);
+
   void handleRequest(const JsonObject& request);
   void handleWsEvent(uint8_t num, WStype_t type, uint8_t * payload, size_t length);
 
