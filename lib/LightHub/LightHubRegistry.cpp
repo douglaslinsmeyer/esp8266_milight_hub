@@ -106,4 +106,98 @@ Fixture* Registry::findFixture(uint16_t fixtureId) {
   return nullptr;
 }
 
+bool Registry::groupNameInUse(const char* name) const {
+  for (const auto& g : groupList) {
+    if (strcmp(g.name, name) == 0) return true;
+  }
+  return false;
+}
+
+Result Registry::createGroup(const char* name, DeviceGroup** out) {
+  if (!isValidGroupName(name)) return Result::INVALID_NAME;
+  if (groupNameInUse(name)) return Result::NAME_TAKEN;
+
+  groupList.emplace_back();
+  DeviceGroup& g = groupList.back();
+  g.id = nextGroupId++;
+  copyStr(g.name, name, MAX_GROUP_NAME_LEN);
+  if (out) *out = &g;
+  return Result::OK;
+}
+
+Result Registry::renameGroup(uint16_t groupId, const char* newName) {
+  DeviceGroup* g = findGroup(groupId);
+  if (g == nullptr) return Result::NOT_FOUND;
+  if (!isValidGroupName(newName)) return Result::INVALID_NAME;
+  if (strcmp(g->name, newName) != 0 && groupNameInUse(newName)) return Result::NAME_TAKEN;
+  copyStr(g->name, newName, MAX_GROUP_NAME_LEN);
+  return Result::OK;
+}
+
+Result Registry::deleteGroup(uint16_t groupId) {
+  for (auto it = groupList.begin(); it != groupList.end(); ++it) {
+    if (it->id == groupId) {
+      groupList.erase(it);
+      return Result::OK;
+    }
+  }
+  return Result::NOT_FOUND;
+}
+
+DeviceGroup* Registry::findGroup(uint16_t groupId) {
+  for (auto& g : groupList) {
+    if (g.id == groupId) return &g;
+  }
+  return nullptr;
+}
+
+Result Registry::addMember(uint16_t groupId, uint16_t fixtureId) {
+  DeviceGroup* g = findGroup(groupId);
+  if (g == nullptr) return Result::NOT_FOUND;
+  if (findFixture(fixtureId) == nullptr) return Result::NOT_FOUND;
+  if (!g->hasMember(fixtureId)) {
+    g->fixtureIds.push_back(fixtureId);
+  }
+  return Result::OK;
+}
+
+Result Registry::removeMember(uint16_t groupId, uint16_t fixtureId) {
+  DeviceGroup* g = findGroup(groupId);
+  if (g == nullptr) return Result::NOT_FOUND;
+  for (auto it = g->fixtureIds.begin(); it != g->fixtureIds.end(); ++it) {
+    if (*it == fixtureId) {
+      g->fixtureIds.erase(it);
+      break;
+    }
+  }
+  return Result::OK;
+}
+
+Result Registry::setMembers(uint16_t groupId, const std::vector<uint16_t>& fixtureIds) {
+  DeviceGroup* g = findGroup(groupId);
+  if (g == nullptr) return Result::NOT_FOUND;
+  // all-or-nothing: validate every id before mutating
+  for (uint16_t fid : fixtureIds) {
+    if (findFixture(fid) == nullptr) return Result::NOT_FOUND;
+  }
+  std::vector<uint16_t> deduped;
+  for (uint16_t fid : fixtureIds) {
+    bool seen = false;
+    for (uint16_t d : deduped) {
+      if (d == fid) { seen = true; break; }
+    }
+    if (!seen) deduped.push_back(fid);
+  }
+  g->fixtureIds = deduped;
+  return Result::OK;
+}
+
+size_t Registry::groupCountForFixture(uint16_t fixtureId) const {
+  size_t n = 0;
+  for (const auto& g : groupList) {
+    if (g.hasMember(fixtureId)) n++;
+  }
+  return n;
+}
+
 }
