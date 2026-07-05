@@ -11,6 +11,10 @@
 #define MQTT_CONNECTION_ATTEMPT_FREQUENCY 5000
 #endif
 
+#ifndef MQTT_RECONNECT_BACKOFF_MAX
+#define MQTT_RECONNECT_BACKOFF_MAX 60000
+#endif
+
 #ifndef MQTT_PACKET_CHUNK_SIZE
 #define MQTT_PACKET_CHUNK_SIZE 128
 #endif
@@ -71,6 +75,7 @@ private:
   Settings& settings;
   char* domain;
   unsigned long lastConnectAttempt;
+  unsigned long reconnectBackoffMs = MQTT_CONNECTION_ATTEMPT_FREQUENCY;
   OnConnectFn onConnectFn;
   bool connected;
 

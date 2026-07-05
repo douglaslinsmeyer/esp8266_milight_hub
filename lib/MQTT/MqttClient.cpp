@@ -101,7 +101,7 @@ void MqttClient::sendBirthMessage() {
 }
 
 void MqttClient::reconnect() {
-  if (lastConnectAttempt > 0 && (millis() - lastConnectAttempt) < MQTT_CONNECTION_ATTEMPT_FREQUENCY) {
+  if (lastConnectAttempt > 0 && (millis() - lastConnectAttempt) < reconnectBackoffMs) {
     return;
   }
 
@@ -109,13 +109,18 @@ void MqttClient::reconnect() {
     if (connect()) {
       subscribe();
       sendBirthMessage();
-
-#ifdef MQTT_DEBUG
-      Serial.println(F("MqttClient - Successfully connected to MQTT server"));
-#endif
+      reconnectBackoffMs = MQTT_CONNECTION_ATTEMPT_FREQUENCY;
     } else {
       Serial.print(F("ERROR: Failed to connect to MQTT server rc="));
-      Serial.println(mqttClient.state());
+      Serial.print(mqttClient.state());
+      Serial.print(F(", retrying in "));
+      Serial.print(reconnectBackoffMs * 2 <= MQTT_RECONNECT_BACKOFF_MAX ? reconnectBackoffMs * 2 : MQTT_RECONNECT_BACKOFF_MAX);
+      Serial.println(F("ms"));
+      if (reconnectBackoffMs * 2 <= MQTT_RECONNECT_BACKOFF_MAX) {
+        reconnectBackoffMs *= 2;
+      } else {
+        reconnectBackoffMs = MQTT_RECONNECT_BACKOFF_MAX;
+      }
     }
   }
 
