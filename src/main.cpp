@@ -22,6 +22,7 @@
 #include <HomeAssistantDiscoveryClient.h>
 #include <TransitionController.h>
 #include <ProjectWifi.h>
+#include <LightHubStorage.h>
 
 #include <ESPId.h>
 
@@ -49,6 +50,7 @@ WiFiManagerParameter* wifiMode = NULL;
 static LEDStatus *ledStatus;
 
 Settings settings;
+LightHub::Registry lightHubRegistry;
 
 MiLightClient* milightClient = NULL;
 RadioSwitchboard* radios = nullptr;
@@ -458,6 +460,7 @@ void setup() {
   #endif
 
   Settings::load(settings);
+  LightHub::loadRegistry(lightHubRegistry);
   ESPMH_SETUP_WIFI(settings);
   applySettings();
 
