@@ -16,7 +16,20 @@ void MiLightHttpServer::bindLightHubRoutes() {
   server
     .buildHandler("/fixtures/:fixture_id")
     .on(HTTP_GET, std::bind(&MiLightHttpServer::handleGetFixture, this, _1))
-    .on(HTTP_PUT, std::bind(&MiLightHttpServer::handleUpdateFixture, this, _1));
+    .on(HTTP_PUT, std::bind(&MiLightHttpServer::handleUpdateFixture, this, _1))
+    .on(HTTP_DELETE, std::bind(&MiLightHttpServer::handleDeleteFixture, this, _1));
+
+  server
+    .buildHandler("/fixtures/:fixture_id/state")
+    .on(HTTP_PUT, std::bind(&MiLightHttpServer::handleFixtureState, this, _1));
+
+  server
+    .buildHandler("/fixtures/:fixture_id/pair")
+    .on(HTTP_POST, std::bind(&MiLightHttpServer::handlePairFixture, this, _1));
+
+  server
+    .buildHandler("/fixtures/:fixture_id/blink")
+    .on(HTTP_POST, std::bind(&MiLightHttpServer::handleBlinkFixture, this, _1));
 
   server
     .buildHandler("/light_registry.json")
@@ -197,4 +210,156 @@ void MiLightHttpServer::handleUpdateFixture(RequestContext& request) {
   }
 
   lightHubFixtureJson(*fixture, request.response.json.to<JsonObject>());
+}
+
+// ---- fixture RF operations ----
+
+static const size_t LIGHT_HUB_RF_REPEATS = 10;  // short bursts → many land in the pairing window
+
+// resolves :fixture_id to a fixture + its remote config; returns false after writing the error
+bool MiLightHttpServer::lightHubResolveFixture(RequestContext& request,
+    LightHub::Fixture** fixtureOut, const MiLightRemoteConfig** configOut) {
+  LightHub::Fixture* fixture = lightHubRegistry.findFixture(atoi(request.pathVariables.get("fixture_id")));
+  if (fixture == nullptr) {
+    request.response.setCode(404);
+    request.response.json[F("error")] = F("fixture not found");
+    return false;
+  }
+  const MiLightRemoteConfig* config = MiLightRemoteConfig::fromType(LightHub::kindToProtocol(fixture->kind));
+  if (config == nullptr) {
+    request.response.setCode(500);
+    request.response.json[F("error")] = F("fixture kind has no remote config");
+    return false;
+  }
+  *fixtureOut = fixture;
+  *configOut = config;
+  return true;
+}
+
+// drains the packet queue, then keeps servicing it until waitMs has elapsed
+void MiLightHttpServer::lightHubDrainAndWait(unsigned long waitMs) {
+  const unsigned long start = millis();
+  while (packetSender->isSending() || (millis() - start) < waitMs) {
+    packetSender->loop();
+    yield();
+  }
+}
+
+void MiLightHttpServer::handleFixtureState(RequestContext& request) {
+  LightHub::Fixture* fixture = nullptr;
+  const MiLightRemoteConfig* config = nullptr;
+  if (!lightHubResolveFixture(request, &fixture, &config)) return;
+
+  JsonObject body = request.getJsonBody().as<JsonObject>();
+  if (body.isNull()) {
+    request.response.setCode(400);
+    request.response.json[F("error")] = F("must send a command body");
+    return;
+  }
+  milightClient->prepare(config, fixture->deviceId, fixture->group);
+  handleRequest(body);
+
+  BulbId bulbId(fixture->deviceId, fixture->group, config->type);
+  sendGroupState(false, bulbId, request.response);
+}
+
+void MiLightHttpServer::handlePairFixture(RequestContext& request) {
+  LightHub::Fixture* fixture = nullptr;
+  const MiLightRemoteConfig* config = nullptr;
+  if (!lightHubResolveFixture(request, &fixture, &config)) return;
+
+  JsonObject body = request.getJsonBody().as<JsonObject>();
+  long durationMs = body.isNull() ? 3000 : (body[F("duration_ms")] | 3000);
+  if (durationMs < 500) durationMs = 500;
+  if (durationMs > 10000) durationMs = 10000;
+
+  milightClient->prepare(config, fixture->deviceId, fixture->group);
+  milightClient->setRepeatsOverride(LIGHT_HUB_RF_REPEATS);
+  const unsigned long start = millis();
+  size_t bursts = 0;
+  while ((millis() - start) < (unsigned long) durationMs) {
+    milightClient->pair();
+    lightHubDrainAndWait(0);
+    bursts++;
+    yield();
+  }
+  milightClient->clearRepeatsOverride();
+
+  fixture->status = LightHub::FixtureStatus::PAIRED;
+  const bool registryOk = LightHub::saveRegistry(lightHubRegistry);
+  if (!registryOk) {
+    request.response.setCode(500);
+    request.response.json[F("error")] = F("failed to persist fixture status");
+    return;
+  }
+  request.response.json[F("success")] = true;
+  request.response.json[F("bursts")] = bursts;
+  request.response.json[F("duration_ms")] = durationMs;
+}
+
+void MiLightHttpServer::handleBlinkFixture(RequestContext& request) {
+  LightHub::Fixture* fixture = nullptr;
+  const MiLightRemoteConfig* config = nullptr;
+  if (!lightHubResolveFixture(request, &fixture, &config)) return;
+
+  JsonObject body = request.getJsonBody().as<JsonObject>();
+  long cycles = body.isNull() ? 2 : (body[F("cycles")] | 2);
+  if (cycles < 1) cycles = 1;
+  if (cycles > 5) cycles = 5;
+
+  StaticJsonDocument<64> onDoc;
+  onDoc[F("status")] = "ON";
+  StaticJsonDocument<64> offDoc;
+  offDoc[F("status")] = "OFF";
+
+  milightClient->prepare(config, fixture->deviceId, fixture->group);
+  milightClient->setRepeatsOverride(LIGHT_HUB_RF_REPEATS);
+  for (long i = 0; i < cycles; i++) {
+    milightClient->update(offDoc.as<JsonObject>());
+    lightHubDrainAndWait(400);
+    milightClient->update(onDoc.as<JsonObject>());
+    lightHubDrainAndWait(400);
+  }
+  milightClient->clearRepeatsOverride();
+
+  request.response.json[F("success")] = true;
+  request.response.json[F("cycles")] = cycles;
+}
+
+void MiLightHttpServer::handleDeleteFixture(RequestContext& request) {
+  LightHub::Fixture* fixture = nullptr;
+  const MiLightRemoteConfig* config = nullptr;
+  if (!lightHubResolveFixture(request, &fixture, &config)) return;
+
+  JsonObject body = request.getJsonBody().as<JsonObject>();
+  const bool rfUnpair = body.isNull() ? true : (body[F("rf_unpair")] | true);
+  long durationMs = body.isNull() ? 3000 : (body[F("duration_ms")] | 3000);
+  if (durationMs < 500) durationMs = 500;
+  if (durationMs > 10000) durationMs = 10000;
+
+  if (rfUnpair) {
+    // same window mechanics as pair: caller power-cycles the fixture first
+    milightClient->prepare(config, fixture->deviceId, fixture->group);
+    milightClient->setRepeatsOverride(LIGHT_HUB_RF_REPEATS);
+    const unsigned long start = millis();
+    while ((millis() - start) < (unsigned long) durationMs) {
+      milightClient->unpair();
+      lightHubDrainAndWait(0);
+      yield();
+    }
+    milightClient->clearRepeatsOverride();
+  }
+
+  lightHubDeleteAliasByName(fixture->name);
+  lightHubRegistry.deleteFixture(fixture->id);  // also strips it from every group
+  const bool registryOk = LightHub::saveRegistry(lightHubRegistry);
+  saveSettings();  // persists alias deletion regardless, keeping the alias store in sync with RAM state
+
+  if (!registryOk) {
+    request.response.setCode(500);
+    request.response.json[F("error")] = F("failed to persist fixture deletion");
+    return;
+  }
+  request.response.json[F("success")] = true;
+  request.response.json[F("rf_unpair")] = rfUnpair;
 }

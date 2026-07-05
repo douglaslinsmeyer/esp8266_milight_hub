@@ -122,11 +122,18 @@ protected:
   void handleCreateFixture(RequestContext& request);
   void handleGetFixture(RequestContext& request);
   void handleUpdateFixture(RequestContext& request);
+  void handleFixtureState(RequestContext& request);
+  void handlePairFixture(RequestContext& request);
+  void handleBlinkFixture(RequestContext& request);
+  void handleDeleteFixture(RequestContext& request);
   bool lightHubFixtureNameAvailable(const char* name);
   bool lightHubAddAlias(const char* name, LightHub::Kind kind, uint16_t deviceId, uint8_t group);
   void lightHubDeleteAliasByName(const char* name);
   void lightHubWriteError(RequestContext& request, LightHub::Result result);
   void lightHubFixtureJson(const LightHub::Fixture& f, JsonObject out);
+  bool lightHubResolveFixture(RequestContext& request, LightHub::Fixture** fixtureOut,
+      const MiLightRemoteConfig** configOut);
+  void lightHubDrainAndWait(unsigned long waitMs);
 
   void handleRequest(const JsonObject& request);
   void handleWsEvent(uint8_t num, WStype_t type, uint8_t * payload, size_t length);
