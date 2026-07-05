@@ -130,6 +130,8 @@ void MiLightHttpServer::begin() {
     .buildHandler("/firmware")
     .handleOTA();
 
+  bindLightHubRoutes();
+
   server.clearBuilders();
 
   // set up web socket server

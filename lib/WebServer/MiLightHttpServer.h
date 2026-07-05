@@ -6,6 +6,7 @@
 #include <RadioSwitchboard.h>
 #include <PacketSender.h>
 #include <TransitionController.h>
+#include <LightHubRegistry.h>
 
 #ifndef _MILIGHT_HTTP_SERVER
 #define _MILIGHT_HTTP_SERVER
@@ -41,7 +42,8 @@ public:
     GroupStateStore*& stateStore,
     PacketSender*& packetSender,
     RadioSwitchboard*& radios,
-    TransitionController& transitions
+    TransitionController& transitions,
+    LightHub::Registry& lightHubRegistry
   )
     : authProvider(settings)
     , server(80, authProvider)
@@ -53,6 +55,7 @@ public:
     , packetSender(packetSender)
     , radios(radios)
     , transitions(transitions)
+    , lightHubRegistry(lightHubRegistry)
   { }
 
   void begin();
@@ -113,6 +116,18 @@ protected:
   void handleCreateBackup(RequestContext& request);
   void handleRestoreBackup(RequestContext& request);
 
+  // LightHub (implemented in MiLightHttpServerLightHub.cpp)
+  void bindLightHubRoutes();
+  void handleListFixtures();  // no RequestContext: streams its own chunked response
+  void handleCreateFixture(RequestContext& request);
+  void handleGetFixture(RequestContext& request);
+  void handleUpdateFixture(RequestContext& request);
+  bool lightHubFixtureNameAvailable(const char* name);
+  void lightHubAddAlias(const char* name, LightHub::Kind kind, uint16_t deviceId, uint8_t group);
+  void lightHubDeleteAliasByName(const char* name);
+  void lightHubWriteError(RequestContext& request, LightHub::Result result);
+  void lightHubFixtureJson(const LightHub::Fixture& f, JsonObject out);
+
   void handleRequest(const JsonObject& request);
   void handleWsEvent(uint8_t num, WStype_t type, uint8_t * payload, size_t length);
 
@@ -134,6 +149,7 @@ protected:
   RadioSwitchboard*& radios;
   TransitionController& transitions;
   AboutHandler aboutHandler;
+  LightHub::Registry& lightHubRegistry;
 
 
 };

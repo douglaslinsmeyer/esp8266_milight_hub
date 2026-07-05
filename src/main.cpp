@@ -419,7 +419,7 @@ void postConnectSetup() {
   SSDP.setDeviceType("upnp:rootdevice");
   SSDP.begin();
 
-  httpServer = new MiLightHttpServer(settings, milightClient, stateStore, packetSender, radios, transitions);
+  httpServer = new MiLightHttpServer(settings, milightClient, stateStore, packetSender, radios, transitions, lightHubRegistry);
   httpServer->onSettingsSaved(applySettings);
   httpServer->onGroupDeleted(onGroupDeleted);
   httpServer->onAbout(aboutHandler);
