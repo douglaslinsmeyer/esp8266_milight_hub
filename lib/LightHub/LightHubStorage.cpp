@@ -43,8 +43,14 @@ bool saveRegistry(Registry& registry) {
   }
   DynamicJsonDocument doc(LIGHT_REGISTRY_BUFFER_SIZE);
   registry.toJson(doc);
-  serializeJson(doc, f);
+  const size_t expected = measureJson(doc);
+  const size_t written = serializeJson(doc, f);
   f.close();
+  if (written != expected) {
+    Serial.printf_P(PSTR("LightHub: short write to %s (%u of %u bytes)\n"),
+        REGISTRY_FILE, (unsigned) written, (unsigned) expected);
+    return false;
+  }
   return true;
 }
 
