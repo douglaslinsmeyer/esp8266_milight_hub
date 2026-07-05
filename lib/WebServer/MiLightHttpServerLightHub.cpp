@@ -462,23 +462,40 @@ void MiLightHttpServer::handleUpdateGroupLH(RequestContext& request) {
     request.response.json[F("error")] = F("must specify name and/or fixture_ids");
     return;
   }
+  // pre-validate everything before mutating — a failed update must not leave partial state
+  const char* newName = nullptr;
   if (body.containsKey(F("name"))) {
-    const LightHub::Result result = lightHubRegistry.renameGroup(group->id, body[F("name")].as<const char*>());
-    if (result != LightHub::Result::OK) {
-      lightHubWriteError(request, result);
+    newName = body[F("name")].as<const char*>();
+    if (!LightHub::isValidGroupName(newName)) {
+      request.response.setCode(400);
+      request.response.json[F("error")] = F("invalid name");
+      return;
+    }
+    if (strcmp(group->name, newName) != 0 && lightHubRegistry.groupNameInUse(newName)) {
+      request.response.setCode(400);
+      request.response.json[F("error")] = F("name already in use");
       return;
     }
   }
-  if (body.containsKey(F("fixture_ids"))) {
-    std::vector<uint16_t> ids;
+  std::vector<uint16_t> ids;
+  const bool haveIds = body.containsKey(F("fixture_ids"));
+  if (haveIds) {
     for (JsonVariant v : body[F("fixture_ids")].as<JsonArray>()) {
       ids.push_back(v | 0);
     }
-    const LightHub::Result result = lightHubRegistry.setMembers(group->id, ids);
-    if (result != LightHub::Result::OK) {
-      lightHubWriteError(request, result);
-      return;
+    for (uint16_t fid : ids) {
+      if (lightHubRegistry.findFixture(fid) == nullptr) {
+        request.response.setCode(404);
+        request.response.json[F("error")] = F("fixture not found");
+        return;
+      }
     }
+  }
+  if (newName != nullptr) {
+    lightHubRegistry.renameGroup(group->id, newName);   // cannot fail: pre-validated
+  }
+  if (haveIds) {
+    lightHubRegistry.setMembers(group->id, ids);        // cannot fail: pre-validated
   }
   const bool registryOk = LightHub::saveRegistry(lightHubRegistry);
   if (!registryOk) {
