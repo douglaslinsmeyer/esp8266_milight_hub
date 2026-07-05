@@ -262,6 +262,12 @@ bool Registry::fromJson(JsonVariantConst src) {
     if (f.deviceId >= HUB_DEVICE_ID_FLOOR && f.deviceId >= nextDeviceIdCounter) {
       nextDeviceIdCounter = f.deviceId + 1;
     }
+    // a hand-restored/corrupt registry could carry a device_id below the hub's
+    // reserved-address floor (e.g. the production device address); never load
+    // such a fixture, or RF endpoints would transmit on that address.
+    if (f.deviceId < HUB_DEVICE_ID_FLOOR) {
+      fixtureList.pop_back();
+    }
   }
 
   for (JsonObjectConst jg : root["groups"].as<JsonArrayConst>()) {

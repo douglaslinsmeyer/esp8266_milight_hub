@@ -105,6 +105,77 @@ void test_from_json_clears_previous_state() {
   TEST_ASSERT_FALSE(r.fixtureNameInUse("old_fixture"));
 }
 
+void test_sub_floor_fixture_skipped_on_load() {
+  // a hand-restored/corrupt registry could carry a device_id below the hub's
+  // reserved-address floor (e.g. production device 0x13CD) — such a fixture
+  // must never be loaded, or RF endpoints would transmit on that address.
+  DynamicJsonDocument doc(4096);
+  doc["version"] = 2;
+  JsonObject f = doc["fixtures"].createNestedObject();
+  f["id"] = 7;
+  f["name"] = "sub_floor";
+  f["kind"] = "rgb_cct";
+  f["device_id"] = 0x13CD;
+  f["group"] = 1;
+
+  Registry r;
+  TEST_ASSERT_TRUE(r.fromJson(doc.as<JsonVariantConst>()));
+  TEST_ASSERT_NULL(r.findFixture(7));
+
+  Fixture* nf;
+  r.createFixture("post_8", Kind::RGB_CCT, &nf);
+  TEST_ASSERT_EQUAL(8, nf->id);                    // counter still recovered from skipped id 7
+  TEST_ASSERT_EQUAL_HEX16(0x2000, nf->deviceId);   // floor reused; sub-floor device id not honored
+}
+
+void test_duplicate_membership_deduped_on_load() {
+  DynamicJsonDocument doc(4096);
+  doc["version"] = 2;
+  JsonArray fixtures = doc.createNestedArray("fixtures");
+  JsonObject f1 = fixtures.createNestedObject();
+  f1["id"] = 1;
+  f1["name"] = "post_1";
+  f1["kind"] = "rgb_cct";
+  f1["device_id"] = 0x2000;
+  f1["group"] = 1;
+  JsonObject f2 = fixtures.createNestedObject();
+  f2["id"] = 2;
+  f2["name"] = "post_2";
+  f2["kind"] = "rgb_cct";
+  f2["device_id"] = 0x2001;
+  f2["group"] = 1;
+  JsonObject g = doc["groups"].createNestedObject();
+  g["id"] = 1;
+  g["name"] = "Patio";
+  JsonArray members = g.createNestedArray("fixture_ids");
+  members.add(1);
+  members.add(1);
+  members.add(2);
+
+  Registry r;
+  TEST_ASSERT_TRUE(r.fromJson(doc.as<JsonVariantConst>()));
+  DeviceGroup* gb = r.findGroup(1);
+  TEST_ASSERT_NOT_NULL(gb);
+  TEST_ASSERT_EQUAL(2, gb->fixtureIds.size());
+}
+
+void test_rgb_kind_round_trips() {
+  Registry r;
+  Fixture* f;
+  r.createFixture("strip_1", Kind::RGB, &f);
+  const uint16_t id = f->id;
+
+  DynamicJsonDocument doc(4096);
+  r.toJson(doc);
+
+  Registry r2;
+  TEST_ASSERT_TRUE(r2.fromJson(doc.as<JsonVariantConst>()));
+  Fixture* fb = r2.findFixture(id);
+  TEST_ASSERT_NOT_NULL(fb);
+  TEST_ASSERT_EQUAL(Kind::RGB, fb->kind);
+  TEST_ASSERT_EQUAL(0, fb->group);
+}
+
 int main(int, char**) {
   UNITY_BEGIN();
   RUN_TEST(test_round_trip_preserves_everything);
@@ -112,5 +183,8 @@ int main(int, char**) {
   RUN_TEST(test_counters_clamped_and_recovered);
   RUN_TEST(test_from_json_empty_and_malformed);
   RUN_TEST(test_from_json_clears_previous_state);
+  RUN_TEST(test_sub_floor_fixture_skipped_on_load);
+  RUN_TEST(test_duplicate_membership_deduped_on_load);
+  RUN_TEST(test_rgb_kind_round_trips);
   return UNITY_END();
 }

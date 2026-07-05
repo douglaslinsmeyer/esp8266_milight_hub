@@ -36,13 +36,22 @@ bool loadRegistry(Registry& registry) {
 }
 
 bool saveRegistry(Registry& registry) {
+  DynamicJsonDocument doc(LIGHT_REGISTRY_BUFFER_SIZE);
+  if (doc.capacity() == 0) {
+    Serial.println(F("LightHub: registry buffer allocation failed"));
+    return false;
+  }
+  registry.toJson(doc);
+  if (doc.overflowed()) {
+    Serial.println(F("LightHub: registry exceeds LIGHT_REGISTRY_BUFFER_SIZE"));
+    return false;
+  }
+
   File f = ProjectFS.open(REGISTRY_FILE, "w");
   if (!f) {
     Serial.println(F("LightHub: failed to open registry file for writing"));
     return false;
   }
-  DynamicJsonDocument doc(LIGHT_REGISTRY_BUFFER_SIZE);
-  registry.toJson(doc);
   const size_t expected = measureJson(doc);
   const size_t written = serializeJson(doc, f);
   f.close();

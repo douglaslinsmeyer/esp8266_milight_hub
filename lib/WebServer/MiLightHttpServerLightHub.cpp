@@ -138,6 +138,11 @@ void MiLightHttpServer::handleCreateFixture(RequestContext& request) {
     return;
   }
   const char* name = body[F("name")].as<const char*>();  // explicit .as<>: this ArduinoJson has no implicit const char* conversion
+  if (!LightHub::isValidSlug(name)) {
+    request.response.setCode(400);
+    request.response.json[F("error")] = F("invalid name");
+    return;
+  }
   const LightHub::Kind kind = LightHub::kindFromString(body[F("kind")] | "rgb_cct");
   if (kind == LightHub::Kind::UNKNOWN) {
     request.response.setCode(400);

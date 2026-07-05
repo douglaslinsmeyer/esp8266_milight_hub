@@ -232,8 +232,8 @@ void initMqttClient() {
   mqttClient->onConnect([]() {
     if (settings.homeAssistantDiscoveryPrefix.length() > 0) {
       HomeAssistantDiscoveryClient discoveryClient(settings, mqttClient);
-      discoveryClient.sendDiscoverableDevices(settings.groupIdAliases);
       discoveryClient.removeOldDevices(settings.deletedGroupIdAliases);
+      discoveryClient.sendDiscoverableDevices(settings.groupIdAliases);
 
       settings.deletedGroupIdAliases.clear();
     }
