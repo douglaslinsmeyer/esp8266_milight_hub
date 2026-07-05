@@ -200,4 +200,85 @@ size_t Registry::groupCountForFixture(uint16_t fixtureId) const {
   return n;
 }
 
+void Registry::toJson(JsonDocument& doc) const {
+  doc["version"] = 2;
+  JsonObject counters = doc.createNestedObject("counters");
+  counters["device_id"] = nextDeviceIdCounter;
+  counters["fixture_id"] = nextFixtureId;
+  counters["group_id"] = nextGroupId;
+
+  JsonArray fixtures = doc.createNestedArray("fixtures");
+  for (const auto& f : fixtureList) {
+    JsonObject jf = fixtures.createNestedObject();
+    jf["id"] = f.id;
+    jf["name"] = f.name;
+    jf["kind"] = kindToString(f.kind);
+    jf["device_id"] = f.deviceId;
+    jf["group"] = f.group;
+    jf["status"] = (f.status == FixtureStatus::PAIRED) ? "paired" : "unpaired";
+  }
+
+  JsonArray groups = doc.createNestedArray("groups");
+  for (const auto& g : groupList) {
+    JsonObject jg = groups.createNestedObject();
+    jg["id"] = g.id;
+    jg["name"] = g.name;
+    JsonArray members = jg.createNestedArray("fixture_ids");
+    for (uint16_t fid : g.fixtureIds) {
+      members.add(fid);
+    }
+  }
+}
+
+bool Registry::fromJson(JsonVariantConst src) {
+  if (!src.is<JsonObjectConst>()) return false;
+  JsonObjectConst root = src.as<JsonObjectConst>();
+
+  fixtureList.clear();
+  groupList.clear();
+  nextDeviceIdCounter = HUB_DEVICE_ID_FLOOR;
+  nextFixtureId = 1;
+  nextGroupId = 1;
+
+  JsonObjectConst counters = root["counters"];
+  if (!counters.isNull()) {
+    nextDeviceIdCounter = counters["device_id"] | HUB_DEVICE_ID_FLOOR;
+    nextFixtureId = counters["fixture_id"] | 1;
+    nextGroupId = counters["group_id"] | 1;
+  }
+  if (nextDeviceIdCounter < HUB_DEVICE_ID_FLOOR) nextDeviceIdCounter = HUB_DEVICE_ID_FLOOR;
+
+  for (JsonObjectConst jf : root["fixtures"].as<JsonArrayConst>()) {
+    fixtureList.emplace_back();
+    Fixture& f = fixtureList.back();
+    f.id = jf["id"] | 0;
+    copyStr(f.name, jf["name"] | "", MAX_NAME_LEN);
+    f.kind = kindFromString(jf["kind"] | "");
+    f.deviceId = jf["device_id"] | 0;
+    f.group = jf["group"] | fixtureGroup(f.kind);
+    const char* status = jf["status"] | "unpaired";
+    f.status = (strcmp(status, "paired") == 0) ? FixtureStatus::PAIRED : FixtureStatus::UNPAIRED;
+    if (f.id >= nextFixtureId) nextFixtureId = f.id + 1;
+    if (f.deviceId >= HUB_DEVICE_ID_FLOOR && f.deviceId >= nextDeviceIdCounter) {
+      nextDeviceIdCounter = f.deviceId + 1;
+    }
+  }
+
+  for (JsonObjectConst jg : root["groups"].as<JsonArrayConst>()) {
+    groupList.emplace_back();
+    DeviceGroup& g = groupList.back();
+    g.id = jg["id"] | 0;
+    copyStr(g.name, jg["name"] | "", MAX_GROUP_NAME_LEN);
+    for (JsonVariantConst v : jg["fixture_ids"].as<JsonArrayConst>()) {
+      const uint16_t fid = v | 0;
+      if (!g.hasMember(fid)) {
+        g.fixtureIds.push_back(fid);
+      }
+    }
+    if (g.id >= nextGroupId) nextGroupId = g.id + 1;
+  }
+
+  return true;
+}
+
 }
