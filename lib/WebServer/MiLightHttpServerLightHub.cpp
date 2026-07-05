@@ -30,12 +30,13 @@ bool MiLightHttpServer::lightHubFixtureNameAvailable(const char* name) {
     && settings.groupIdAliases.find(String(name)) == settings.groupIdAliases.end();
 }
 
-void MiLightHttpServer::lightHubAddAlias(const char* name, LightHub::Kind kind, uint16_t deviceId, uint8_t group) {
+bool MiLightHttpServer::lightHubAddAlias(const char* name, LightHub::Kind kind, uint16_t deviceId, uint8_t group) {
   const MiLightRemoteConfig* config = MiLightRemoteConfig::fromType(LightHub::kindToProtocol(kind));
   if (config == nullptr) {
-    return;
+    return false;
   }
   settings.addAlias(name, BulbId(deviceId, group, config->type));
+  return true;
 }
 
 void MiLightHttpServer::lightHubDeleteAliasByName(const char* name) {
@@ -89,9 +90,11 @@ void MiLightHttpServer::handleListFixtures() {
     serializeJson(item, chunk);  // ArduinoJson appends to String
     sendChunk(chunk);
     first = false;
+    yield();
   }
   sendChunk(String(F("]}")));
   client.print("0\r\n\r\n");  // chunked-body terminator
+  client.stop();
 }
 
 void MiLightHttpServer::handleCreateFixture(RequestContext& request) {
@@ -121,9 +124,15 @@ void MiLightHttpServer::handleCreateFixture(RequestContext& request) {
     return;
   }
 
-  lightHubAddAlias(fixture->name, kind, fixture->deviceId, fixture->group);
-  LightHub::saveRegistry(lightHubRegistry);
-  saveSettings();  // persists aliases; settingsSavedHandler → applySettings → HA discovery republish
+  const bool aliasOk = lightHubAddAlias(fixture->name, kind, fixture->deviceId, fixture->group);
+  const bool registryOk = LightHub::saveRegistry(lightHubRegistry);
+  saveSettings();  // persists aliases; settingsSavedHandler → applySettings → HA discovery republish; keep in sync regardless
+
+  if (!aliasOk || !registryOk) {
+    request.response.setCode(500);
+    request.response.json[F("error")] = F("failed to persist fixture");
+    return;
+  }
 
   lightHubFixtureJson(*fixture, request.response.json.to<JsonObject>());
 }
@@ -177,9 +186,15 @@ void MiLightHttpServer::handleUpdateFixture(RequestContext& request) {
 
   lightHubDeleteAliasByName(fixture->name);
   lightHubRegistry.renameFixture(fixture->id, newName);
-  lightHubAddAlias(fixture->name, fixture->kind, fixture->deviceId, fixture->group);
-  LightHub::saveRegistry(lightHubRegistry);
-  saveSettings();
+  const bool aliasOk = lightHubAddAlias(fixture->name, fixture->kind, fixture->deviceId, fixture->group);
+  const bool registryOk = LightHub::saveRegistry(lightHubRegistry);
+  saveSettings();  // keep alias store persistence + discovery in sync with RAM state regardless
+
+  if (!aliasOk || !registryOk) {
+    request.response.setCode(500);
+    request.response.json[F("error")] = F("failed to persist fixture");
+    return;
+  }
 
   lightHubFixtureJson(*fixture, request.response.json.to<JsonObject>());
 }

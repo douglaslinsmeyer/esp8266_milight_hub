@@ -123,7 +123,7 @@ protected:
   void handleGetFixture(RequestContext& request);
   void handleUpdateFixture(RequestContext& request);
   bool lightHubFixtureNameAvailable(const char* name);
-  void lightHubAddAlias(const char* name, LightHub::Kind kind, uint16_t deviceId, uint8_t group);
+  bool lightHubAddAlias(const char* name, LightHub::Kind kind, uint16_t deviceId, uint8_t group);
   void lightHubDeleteAliasByName(const char* name);
   void lightHubWriteError(RequestContext& request, LightHub::Result result);
   void lightHubFixtureJson(const LightHub::Fixture& f, JsonObject out);
