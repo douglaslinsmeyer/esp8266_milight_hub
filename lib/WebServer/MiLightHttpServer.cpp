@@ -11,9 +11,6 @@
 #include <ProjectFS.h>
 #include <StreamUtils.h>
 
-#include <index.html.gz.h>
-#include <bundle.css.gz.h>
-#include <bundle.js.gz.h>
 #include <BackupManager.h>
 
 #ifdef ESP32
@@ -26,15 +23,7 @@ using namespace std::placeholders;
 void MiLightHttpServer::begin() {
   server
     .buildHandler("/")
-    .onSimple(HTTP_GET, std::bind(&MiLightHttpServer::handleServe_P, this, index_html_gz, index_html_gz_len, "text/html"));
-
-  server
-    .buildHandler(bundle_css_filename)
-    .onSimple(HTTP_GET, std::bind(&MiLightHttpServer::handleServe_P, this, bundle_css_gz, bundle_css_gz_len, "text/css"));
-
-  server
-    .buildHandler(bundle_js_filename)
-    .onSimple(HTTP_GET, std::bind(&MiLightHttpServer::handleServe_P, this, bundle_js_gz, bundle_js_gz_len, "application/javascript"));
+    .onSimple(HTTP_GET, std::bind(&MiLightHttpServer::handleServeApiOnlyNotice, this));
 
   server
     .buildHandler("/settings")
@@ -688,34 +677,12 @@ void MiLightHttpServer::handlePacketSent(uint8_t *packet, const MiLightRemoteCon
   }
 }
 
-void MiLightHttpServer::handleServe_P(const char* data, size_t length, const char* contentType) {
-  const size_t CHUNK_SIZE = 4096; 
-
-  server.setContentLength(CONTENT_LENGTH_UNKNOWN);
-  server.sendHeader("Content-Encoding", "gzip");
-  server.sendHeader("Cache-Control", "public, max-age=31536000");
-  server.send(200, contentType);
-
-  WiFiClient client = server.client();
-
-  size_t remaining = length;
-  while (remaining > 0) {
-    size_t chunk = remaining > CHUNK_SIZE ? CHUNK_SIZE : remaining;
-    
-    // Send chunk size in hexadecimal format
-    client.printf("%X\r\n", chunk);
-    
-    // Send chunk data
-    client.write_P(data, chunk);
-    client.print("\r\n");
-    
-    data += chunk;
-    remaining -= chunk;
-  }
-
-  // Send the terminal chunk
-  client.print("0\r\n\r\n");
-  client.stop();
+void MiLightHttpServer::handleServeApiOnlyNotice() {
+  server.send_P(
+    200,
+    TEXT_PLAIN,
+    PSTR("MiLight Hub -- API-only firmware. The web UI moved to the companion app.\nAPI reference: docs/fixtures-api.md (hub repo). Endpoints: /about /fixtures /groups /settings\n")
+  );
 }
 
 void MiLightHttpServer::handleGetTransition(RequestContext& request) {

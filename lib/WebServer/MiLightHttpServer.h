@@ -70,7 +70,7 @@ public:
 protected:
 
   bool serveFile(const char* file, const char* contentType = "text/html");
-  void handleServe_P(const char* data, size_t length, const char* contentType);
+  void handleServeApiOnlyNotice();
   void sendGroupState(bool allowAsync, BulbId& bulbId, RichHttp::Response& response);
 
   void serveSettings();
